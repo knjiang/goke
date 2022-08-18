@@ -45,42 +45,51 @@ func Run(registry *Registry, arguments []string) error {
 	totalStartTime := time.Now()
 
 	var failedTasks []string
-	for _, t := range tasksToRun {
-		executor := t.Executor()
-		if executor == nil {
-			// this task is just an aggregate task
-			continue
+	for _, g := range tasksToRun {
+		var wg sync.WaitGroup
+		for _, t := range g {
+			t := t
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				executor := t.Executor()
+				if executor == nil {
+					// this task is just an aggregate task
+					return
+				}
+
+				taskArgs, err := argsForTask(t, opts.args)
+				if err != nil {
+					return
+				}
+
+				ctx := NewContext(context.Background(), writer, taskArgs)
+				ctx.UI = ui
+				ctx.Verbose = opts.verbose
+
+				ctx.Logln(ui.Info("START"), " |", ui.Highlight(t.Name()))
+				writer.SetPrefix(prefix)
+
+				startTime := time.Now()
+				err = executor(ctx)
+				finishedTime := time.Now()
+
+				writer.SetPrefix(nil)
+				if err != nil {
+					failedTasks = append(failedTasks, t.Name())
+					ctx.Logln(ui.Error("FAIL"), "  |", ui.Highlight(t.Name()), "in", finishedTime.Sub(startTime).String())
+					writer.SetPrefix(prefix)
+					ctx.Logln(ui.Highlight(err.Error()))
+					writer.SetPrefix(nil)
+					if !t.ContinueOnError() {
+						return
+					}
+				} else {
+					ctx.Logln(ui.Success("FINISH"), "|", ui.Highlight(t.Name()), "in", finishedTime.Sub(startTime).String())
+				}
+			}()
 		}
-
-		taskArgs, err := argsForTask(t, opts.args)
-		if err != nil {
-			return err
-		}
-
-		ctx := NewContext(context.Background(), writer, taskArgs)
-		ctx.UI = ui
-		ctx.Verbose = opts.verbose
-
-		ctx.Logln(ui.Info("START"), " |", ui.Highlight(t.Name()))
-		writer.SetPrefix(prefix)
-
-		startTime := time.Now()
-		err = executor(ctx)
-		finishedTime := time.Now()
-
-		writer.SetPrefix(nil)
-		if err != nil {
-			failedTasks = append(failedTasks, t.Name())
-			ctx.Logln(ui.Error("FAIL"), "  |", ui.Highlight(t.Name()), "in", finishedTime.Sub(startTime).String())
-			writer.SetPrefix(prefix)
-			ctx.Logln(ui.Highlight(err.Error()))
-			writer.SetPrefix(nil)
-			if !t.ContinueOnError() {
-				break
-			}
-		} else {
-			ctx.Logln(ui.Success("FINISH"), "|", ui.Highlight(t.Name()), "in", finishedTime.Sub(startTime).String())
-		}
+		wg.Wait()
 	}
 
 	totalDuration := time.Since(totalStartTime)

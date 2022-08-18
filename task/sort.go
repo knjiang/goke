@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-func sortTasksToRun(allTasks []Task, requiredTaskNames []string) ([]Task, error) {
+func sortTasksToRun(allTasks []Task, requiredTaskNames []string) ([][]Task, error) {
 	graph, err := buildGraph(allTasks, requiredTaskNames)
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := toposort(graph)
+	result, err := findTaskGroups(graph)
 	if err != nil {
 		return nil, err
 	}
@@ -77,11 +77,73 @@ func toposort(g []*graphNode) ([]Task, error) {
 		}
 	}
 
-	for _, n := range g {
-		if len(n.edges) > 0 {
-			return nil, fmt.Errorf("a cycle exists")
-		}
+	err := checkForCycles(g)
+	if err != nil {
+		return nil, err
 	}
 
 	return sorted, nil
+}
+
+func findTaskGroups(g []*graphNode) ([][]Task, error) {
+	taskLevels := make(map[*graphNode]int)
+	var queue []*graphNode
+	for _, n := range g {
+		if len(n.edges) == 0 {
+			queue = append(queue, n)
+			taskLevels[n] = 0
+		}
+	}
+
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		for _, m := range g {
+			for i := range m.edges {
+				if m.edges[i] == n.task.Name() {
+					m.edges = append(m.edges[:i], m.edges[i+1:]...)
+					if len(m.edges) == 0 {
+						queue = append(queue, m)
+					}
+					if taskLevels[m] < taskLevels[n]+1 {
+						taskLevels[m] = taskLevels[n] + 1
+					}
+					break
+				}
+			}
+		}
+	}
+
+	err := checkForCycles(g)
+	if err != nil {
+		return nil, err
+	}
+
+	return createTaskGroups(taskLevels), nil
+}
+
+func createTaskGroups(taskLevels map[*graphNode]int) [][]Task {
+	taskMap := make(map[int][]Task)
+	maxLevel := 0
+	for t, level := range taskLevels {
+		taskMap[level] = append(taskMap[level], t.task)
+		if maxLevel < level {
+			maxLevel = level
+		}
+	}
+	taskGroups := make([][]Task, maxLevel+1)
+	for i := 0; i < maxLevel+1; i++ {
+		taskGroups[i] = taskMap[i]
+	}
+
+	return taskGroups
+}
+
+func checkForCycles(g []*graphNode) error {
+	for _, n := range g {
+		if len(n.edges) > 0 {
+			return fmt.Errorf("a cycle exists")
+		}
+	}
+	return nil
 }
